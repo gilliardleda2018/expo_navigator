@@ -20,6 +20,15 @@ QUESTIONS = [
     ("Segurança", "Pode chamar um táxi aquático?", "Può chiamare un taxi acqueo, per favore?"),
 ]
 
+ROUTE = [
+    ("Desembarcar no Aeroporto Marco Polo", "Aeroporto Marco Polo", "Siga as placas de desembarque, retire a bagagem se necessário e vá até a saída da área de chegadas.", "Onde fica a saída para os transportes aquáticos?", "Scusi, dov'è l'uscita per i trasporti via acqua?"),
+    ("Encontrar o caminho para o píer", "Aeroporto → Darsena", "Siga as placas Trasporti via acqua até os píeres.", "Como chego ao píer da Alilaguna?", "Scusi, come posso arrivare al molo di Alilaguna?"),
+    ("Comprar ou validar a passagem", "Bilheteria Alilaguna", "Confirme o destino San Zaccaria, a linha e o horário de saída antes de comprar.", "Qual é o próximo barco para San Zaccaria?", "Quando parte la prossima barca per San Zaccaria?"),
+    ("Confirmar o embarque", "Píer Alilaguna", "Verifique no local a linha que atende San Zaccaria; rotas e paradas podem mudar.", "Este barco para em San Zaccaria?", "Questa barca ferma a San Zaccaria?"),
+    ("Desembarcar em San Zaccaria", "San Zaccaria", "Acompanhe as paradas e confirme o ponto de desembarque com a tripulação.", "É aqui que devo descer para San Zaccaria?", "È qui che devo scendere per San Zaccaria?"),
+    ("Caminhar até a hospedagem", "Região de Sant’Apollonia / San Marco", "Confirme o endereço completo da hospedagem antes de seguir a pé.", "Como chego à região de Sant’Apollonia?", "Scusi, come posso arrivare nella zona di Sant'Apollonia?"),
+]
+
 def get_key():
     try:
         return st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
@@ -58,28 +67,44 @@ def main():
         st.warning("OPENAI_API_KEY não configurada. Configure a chave no ambiente seguro do servidor.")
     client = get_client(key) if key else None
 
-    options = [f"{category} · {question}" for category, question, _ in QUESTIONS]
-    idx = st.selectbox("Escolha uma pergunta", range(len(QUESTIONS)), format_func=lambda i: options[i])
-    _, question, italian = QUESTIONS[idx]
-    st.subheader(question)
-    st.write(italian)
+    st.subheader("Roteiro passo a passo")
+    if "route_step" not in st.session_state:
+        st.session_state.route_step = 0
+    if "route_done" not in st.session_state:
+        st.session_state.route_done = []
+    mode = st.radio("Modo", ["Roteiro de chegada", "Perguntas adicionais"], horizontal=True)
+    if mode == "Roteiro de chegada":
+        idx = st.session_state.route_step
+        title, location, instruction, question, italian = ROUTE[idx]
+        st.progress(len(st.session_state.route_done) / len(ROUTE))
+        st.caption(f"Etapa {idx + 1} de {len(ROUTE)} · {location}")
+        st.subheader(title)
+        st.write(instruction)
+        st.markdown(f"**Pergunta desta etapa:** {question}")
+        key_suffix = f"route_{idx}"
+    else:
+        idx = st.selectbox("Pergunta adicional", range(len(QUESTIONS)), format_func=lambda i: QUESTIONS[i][1])
+        _, question, italian = QUESTIONS[idx]
+        st.subheader(question)
+        key_suffix = f"extra_{idx}"
+    st.info(italian)
     if st.button("🔊 Ouvir pergunta em italiano", disabled=not client):
         try:
             with st.spinner("Preparando áudio..."):
-                st.session_state[f"question_audio_{idx}"] = speech(client, italian)
+                st.session_state[f"question_audio_{key_suffix}"] = speech(client, italian)
         except Exception:
             st.error("Não foi possível gerar o áudio. Verifique a conexão e tente novamente.")
-    if st.session_state.get(f"question_audio_{idx}"):
-        st.audio(st.session_state[f"question_audio_{idx}"], format="audio/mp3")
+    if st.session_state.get(f"question_audio_{key_suffix}"):
+        st.audio(st.session_state[f"question_audio_{key_suffix}"], format="audio/mp3")
 
     st.divider()
     st.subheader("Resposta do atendente")
     st.caption("Toque no microfone para iniciar e no controle nativo para encerrar. A transcrição e a tradução começam automaticamente.")
-    recording = st.audio_input("🎙️ Gravar resposta em italiano", key=f"record_{idx}", disabled=not client)
-    text_key = f"italian_{idx}"
-    translated_key = f"translated_{idx}"
-    audio_key = f"translated_audio_{idx}"
-    marker_key = f"fingerprint_{idx}"
+    recording = st.audio_input("🎙️ Gravar resposta em italiano", key=f"record_{key_suffix}", disabled=not client)
+    text_key = f"italian_{key_suffix}"
+    translated_key = f"translated_{key_suffix}"
+    audio_key = f"translated_audio_{key_suffix}"
+    marker_key = f"fingerprint_{key_suffix}"
     data = recording.getvalue() if recording else None
     fingerprint = hashlib.sha256(data).hexdigest() if data else None
     if fingerprint and fingerprint != st.session_state.get(marker_key):
@@ -108,6 +133,19 @@ def main():
         st.text_area("Tradução em português", value=st.session_state[translated_key], disabled=True)
         if st.session_state.get(audio_key):
             st.audio(st.session_state[audio_key], format="audio/mp3")
+    if mode == "Roteiro de chegada":
+        previous, next_step = st.columns([1, 2])
+        with previous:
+            if st.button("◀ Anterior", disabled=idx == 0):
+                st.session_state.route_step -= 1
+                st.rerun()
+        with next_step:
+            if st.button("✓ Concluir e avançar" if idx < len(ROUTE) - 1 else "✓ Concluir roteiro"):
+                if idx not in st.session_state.route_done:
+                    st.session_state.route_done.append(idx)
+                if idx < len(ROUTE) - 1:
+                    st.session_state.route_step += 1
+                st.rerun()
     st.caption("O áudio enviado ao serviço de transcrição é processado para atender à solicitação. Evite gravar informações sensíveis.")
 
 if __name__ == "__main__":
